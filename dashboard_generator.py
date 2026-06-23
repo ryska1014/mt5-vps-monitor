@@ -3,9 +3,9 @@ import json
 from datetime import datetime
 import time
 
-# --- KONFIGURACJA ---
+# --- KONFIGURACJA i WERSJONOWANIE ---
+DASHBOARD_VERSION = "1.0.2"  # Poprawiony błąd f-string w JS
 DIRECTORY_PATH = r"C:\Users\Administrator\AppData\Roaming\MetaQuotes\Terminal\Common\Files"
-LATEST_VERSION = "4.55"
 OUTPUT_HTML_FILE = "dashboard.html"
 
 
@@ -49,16 +49,35 @@ def load_all_accounts():
     return accounts_data
 
 
+def parse_version(v_str):
+    try:
+        return tuple(map(int, v_str.strip().split('.')))
+    except Exception:
+        return (0, 0)
+
+
 def generate_html():
     accounts = load_all_accounts()
-    now_str = datetime.now().strftime("%Y.%m.%d %H:%M:%S")
+    now = datetime.now()
+    now_str = now.strftime("%Y.%m.%d %H:%M:%S")
     
+    # --- AUTOMATYCZNE WYKRYWANIE NAJWYŻSZEJ WERSJI BOTÓW MT5 ---
+    highest_version_str = "0.00"
+    highest_version_tuple = (0, 0)
+    
+    for item in accounts.values():
+        v_str = item["today"].get("version", "0.00")
+        current_tuple = parse_version(v_str)
+        if current_tuple > highest_version_tuple:
+            highest_version_tuple = current_tuple
+            highest_version_str = v_str
+            
     html = f"""<!DOCTYPE html>
     <html lang="pl">
     <head>
         <meta charset="UTF-8">
         <meta http-equiv="refresh" content="30">
-        <title>PROP MONITOR Global Dashboard</title>
+        <title>PROP MONITOR Global Dashboard v{DASHBOARD_VERSION}</title>
         <style>
             body {{
                 background-color: #0f172a;
@@ -66,13 +85,38 @@ def generate_html():
                 font-family: 'Segoe UI', Arial, sans-serif;
                 margin: 0;
                 padding: 20px;
+                padding-bottom: 60px;
             }}
             .header {{
                 text-align: center;
                 margin-bottom: 25px;
             }}
             h1 {{ color: #38bdf8; margin-bottom: 5px; font-size: 26px; }}
-            .time {{ color: #64748b; font-size: 14px; }}
+            .time {{ color: #64748b; font-size: 14px; margin-bottom: 12px; }}
+            
+            .badges-container {{
+                display: flex;
+                justify-content: center;
+                gap: 10px;
+            }}
+            .global-badge {{
+                display: inline-block;
+                font-size: 11px;
+                font-weight: bold;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                background-color: #1e293b;
+                padding: 4px 12px;
+                border-radius: 20px;
+            }}
+            .badge-ea {{
+                color: #38bdf8;
+                border: 1px solid rgba(56, 189, 248, 0.2);
+            }}
+            .badge-dash {{
+                color: #a855f7;
+                border: 1px solid rgba(168, 85, 247, 0.2);
+            }}
             
             .table-container {{
                 background-color: #1e293b;
@@ -116,7 +160,6 @@ def generate_html():
             
             .details-row {{ display: none; background-color: #0f172a; }}
             
-            /* TRZYKOLUMNOWY UKŁAD GŁÓWNY SEKCJI SZCZEGÓŁÓW */
             .details-box {{
                 padding: 20px;
                 text-align: left;
@@ -134,10 +177,9 @@ def generate_html():
             }}
             .sub-card h4 {{ margin: 0 0 12px 0; color: #94a3b8; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }}
             
-            /* WIELOWIERSZOWA MINI-SIATKA DLA KOLUMN MIESIĘCY I TYGODNI */
             .history-grid {{
                 display: grid;
-                grid-template-columns: repeat(2, 1fr); /* Rozbicie danych na 2 kolumny wewnątrz karty */
+                grid-template-columns: repeat(2, 1fr);
                 gap: 8px 15px;
             }}
             .history-item {{
@@ -161,6 +203,29 @@ def generate_html():
             .neg {{ color: #f87171; font-weight: bold; }}
             .neutral {{ color: #94a3b8; }}
             
+            .time-ok {{ color: #4ade80; font-weight: bold; font-family: monospace; }}
+            .time-warn {{ 
+                color: #fb923c; 
+                font-weight: bold; 
+                font-family: monospace; 
+                background-color: rgba(251, 146, 60, 0.12); 
+                box-shadow: inset 0 0 0 1px rgba(251, 146, 60, 0.2);
+            }}
+            .time-alert {{ 
+                color: #f87171; 
+                font-weight: bold; 
+                font-family: monospace; 
+                background-color: rgba(248, 113, 113, 0.18); 
+                box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.3);
+                animation: pulse 2s infinite; 
+            }}
+            
+            @keyframes pulse {{
+                0% {{ opacity: 1; }}
+                50% {{ opacity: 0.5; }}
+                100% {{ opacity: 1; }}
+            }}
+            
             .version-tag {{
                 font-size: 10px;
                 padding: 2px 5px;
@@ -170,21 +235,42 @@ def generate_html():
             }}
             .version-alert {{
                 background: #7c2d12 !important;
-                color: #fdba74 !important;
+                color: #fb923c !important;
+                border: 1px solid rgba(251, 146, 60, 0.3);
                 font-weight: bold;
             }}
             
             .badge-on {{ background: #15803d; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; }}
             .badge-off {{ background: #991b1b; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; }}
+            
+            .footer {{
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                width: 100%;
+                background-color: #0f172a;
+                border-top: 1px solid #1e293b;
+                text-align: center;
+                padding: 8px 0;
+                font-size: 11px;
+                color: #475569;
+            }}
         </style>
         <script>
             function toggleRow(accId) {{
                 var el = document.getElementById('details-' + accId);
+                let openRows = JSON.parse(localStorage.getItem("openRows") || "[]");
+                
                 if(el.style.display === 'table-row') {{
                     el.style.display = 'none';
+                    openRows = openRows.filter(id => id !== accId);
                 }} else {{
                     el.style.display = 'table-row';
+                    if(!openRows.includes(accId)) {{
+                        openRows.push(accId);
+                    }}
                 }}
+                localStorage.setItem("openRows", JSON.stringify(openRows));
             }}
         </script>
     </head>
@@ -192,6 +278,10 @@ def generate_html():
         <div class="header">
             <h1>GLOBAL VPS MONITOR</h1>
             <div class="time">Ostatnie odświeżenie danych: {now_str}</div>
+            <div class="badges-container">
+                <div class="global-badge badge-ea">Wykryty skrypt MT5: v{highest_version_str}</div>
+                <div class="global-badge badge-dash">Dashboard System: v{DASHBOARD_VERSION}</div>
+            </div>
         </div>
 
         <div class="table-container">
@@ -200,10 +290,10 @@ def generate_html():
                     <tr>
                         <th onclick="sortTable(0, 'str')">Konto</th>
                         <th onclick="sortTable(1, 'str')">Broker / Serwer</th>
-                        <th onclick="sortTable(2, 'time')">Aktualizacja</th>
+                        <th onclick="sortTable(2, 'num')">Aktualizacja</th>
                         <th onclick="sortTable(3, 'num')">Balance</th>
                         <th onclick="sortTable(4, 'num')">Equity</th>
-                        <th id="pnlHeader" onclick="sortTable(5, 'num')">Niezamknięte PnL</th>
+                        <th onclick="sortTable(5, 'num')">Niezamknięte PnL</th>
                         <th onclick="sortTable(6, 'num')">Wynik Dziś</th>
                         <th onclick="sortTable(7, 'num')">Tydzień (W0)</th>
                         <th onclick="sortTable(8, 'num')">Miesiąc (M0)</th>
@@ -226,8 +316,9 @@ def generate_html():
         pnl_class = "pos" if pnl_open > 0 else ("neg" if pnl_open < 0 else "neutral")
         today_class = "pos" if today_net > 0 else ("neg" if today_net < 0 else "neutral")
         
-        v_app = today.get("version", "stara")
-        v_class = "version-tag" + (" version-alert" if v_app != LATEST_VERSION else "")
+        v_app = today.get("version", "0.00")
+        is_outdated = parse_version(v_app) < highest_version_tuple
+        v_class = "version-tag" + (" version-alert" if is_outdated else "")
             
         w0 = 0.0
         m0 = 0.0
@@ -245,11 +336,29 @@ def generate_html():
         
         broker_name = today.get("broker", "Nieznany Broker")
         server_name = today.get("server", "Nieznany Serwer")
-        update_time = today.get("last_update_time", "")
-        if len(update_time) >= 19:
-            update_time = update_time[11:]
-        else:
-            update_time = "--:--:--"
+        
+        update_time_str = today.get("last_update_time", "")
+        display_time = "--:--:--"
+        diff_minutes = 9999
+        time_css_class = "time-alert"
+        
+        if update_time_str:
+            try:
+                dt_update = datetime.strptime(update_time_str, "%Y.%m.%d %H:%M:%S")
+                display_time = update_time_str[11:]
+                diff_seconds = (now - dt_update).total_seconds()
+                diff_minutes = int(diff_seconds / 60)
+                
+                if diff_minutes < 15:
+                    time_css_class = "time-ok"
+                elif 15 <= diff_minutes <= 60:
+                    time_css_class = "time-warn"
+                else:
+                    time_css_class = "time-alert"
+            except Exception:
+                display_time = "--:--:--"
+                diff_minutes = 9999
+                time_css_class = "time-alert"
 
         html += f"""
         <tr class="main-row" onclick="toggleRow('{acc_id}')">
@@ -261,7 +370,7 @@ def generate_html():
                 {broker_name}
                 <small>{server_name}</small>
             </td>
-            <td data-val="{update_time}" style="font-size:12px; color:#64748b;">{update_time}</td>
+            <td data-val="{diff_minutes}" class="{time_css_class}">{display_time}</td>
             <td data-val="{balance}">{balance:,.2f}</td>
             <td data-val="{equity}">{equity:,.2f}</td>
             <td data-val="{pnl_open}" class="{pnl_class}">{pnl_open:+.2f}</td>
@@ -274,7 +383,6 @@ def generate_html():
         """
         
         if stats:
-            # DYNAMICZNA GENERACJA WIELOWIERSZOWEGO WIDOKU TYGODNI (W1 - W12)
             weeks_html = ""
             for i in range(1, 13):
                 val = stats["weeks"].get(f"W{i}", 0.0)
@@ -285,7 +393,6 @@ def generate_html():
                     <span class="{cls}">{val:+.2f}</span>
                 </div>"""
 
-            # DYNAMICZNA GENERACJA WIELOWIERSZOWEGO WIDOKU MIESIĘCY (M1 - M12)
             months_html = ""
             for i in range(1, 13):
                 val = stats["months"].get(f"M{i}", 0.0)
@@ -326,7 +433,7 @@ def generate_html():
                                     <strong class="{'pos' if stats['years'].get('Y1',0)>=0 else 'neg'}">{stats['years'].get('Y1',0):+.2f}</strong>
                                 </div>
                                 <div style="margin-top:10px; font-size:11px; color:#64748b; line-height:1.4;">
-                                    * Dane historyczne odświeżane są automatycznie raz na dobę po zmianie daty serwera VPS.
+                                    * Dane historyczne odświeżane sunt automatycznie raz na dobę po zmianie daty serwera VPS.
                                 </div>
                             </div>
                         </div>
@@ -343,72 +450,98 @@ def generate_html():
             </tr>
             """
             
-    html += """
+    html += f"""
                 </tbody>
             </table>
         </div>
 
-        <script>
-            let currentSortCol = -1;
-            let isAsc = true;
+        <div class="footer">
+            PROP MONITOR Core – Dashboard System v{DASHBOARD_VERSION} © 2026
+        </div>
 
-            function sortTable(colIndex, type) {
+        <script>
+            function sortTable(colIndex, type, isAutomatic = false) {{
                 const table = document.getElementById("accountTable");
                 const tbody = table.querySelector("tbody");
                 const allRows = Array.from(tbody.querySelectorAll("tr"));
                 if (allRows.length === 0) return;
 
                 const pairs = [];
-                for (let i = 0; i < allRows.length; i += 2) {
-                    if (allRows[i] && allRows[i].classList.contains('main-row')) {
-                        pairs.push({
+                for (let i = 0; i < allRows.length; i += 2) {{
+                    if (allRows[i] && allRows[i].classList.contains('main-row')) {{
+                        pairs.push({{
                             main: allRows[i],
                             details: allRows[i+1]
-                        });
-                    }
-                }
+                        }});
+                    }}
+                }}
                 
-                if (currentSortCol === colIndex) {
-                    isAsc = !isAsc;
-                } else {
-                    isAsc = true;
-                    currentSortCol = colIndex;
-                }
+                let savedCol = localStorage.getItem("sortCol");
+                let savedAsc = localStorage.getItem("sortAsc");
+                
+                let isAsc = true;
+                
+                if (isAutomatic && savedCol !== null) {{
+                    colIndex = parseInt(savedCol);
+                    isAsc = (savedAsc === "true");
+                    type = (colIndex === 0 || colIndex === 1 || colIndex === 10) ? 'str' : 'num';
+                }} else {{
+                    if (savedCol !== null && parseInt(savedCol) === colIndex) {{
+                        isAsc = (savedAsc !== "true");
+                    }} else {{
+                        isAsc = (colIndex === 2) ? true : false;
+                    }}
+                    localStorage.setItem("sortCol", colIndex);
+                    localStorage.setItem("sortAsc", isAsc);
+                }}
 
                 const headers = table.querySelectorAll("th");
-                headers.forEach((th, idx) => {
+                headers.forEach((th, idx) => {{
                     th.classList.remove("sort-asc", "sort-desc");
-                    if (idx === colIndex) {
+                    if (idx === colIndex) {{
                         th.classList.add(isAsc ? "sort-asc" : "sort-desc");
-                    }
-                });
+                    }}
+                }});
 
-                pairs.sort((pairA, pairB) => {
+                pairs.sort((pairA, pairB) => {{
                     let cellA = pairA.main.children[colIndex].getAttribute("data-val") || "0";
                     let cellB = pairB.main.children[colIndex].getAttribute("data-val") || "0";
 
-                    if (type === 'num') {
+                    if (type === 'num') {{
                         let numA = parseFloat(cellA);
                         let numB = parseFloat(cellB);
                         if (isNaN(numA)) numA = 0;
                         if (isNaN(numB)) numB = 0;
                         return isAsc ? numA - numB : numB - numA;
-                    } else {
+                    }} else {{
                         return isAsc ? cellA.localeCompare(cellB) : cellB.localeCompare(cellA);
-                    }
-                });
+                    }}
+                }});
 
                 tbody.innerHTML = "";
-                pairs.forEach(pair => {
+                pairs.forEach(pair => {{
                     tbody.appendChild(pair.main);
                     tbody.appendChild(pair.details);
-                });
-            }
+                }});
 
-            window.addEventListener('DOMContentLoaded', () => {
-                sortTable(5, 'num');
-                sortTable(5, 'num');
-            });
+                if (isAutomatic) {{
+                    let openRows = JSON.parse(localStorage.getItem("openRows") || "[]");
+                    openRows.forEach(accId => {{
+                        let el = document.getElementById('details-' + accId);
+                        if (el) {{
+                            el.style.display = 'table-row';
+                        }}
+                    }});
+                }}
+            }}
+
+            window.addEventListener('DOMContentLoaded', () => {{
+                if (localStorage.getItem("sortCol") === null) {{
+                    localStorage.setItem("sortCol", 5);
+                    localStorage.setItem("sortAsc", false);
+                }}
+                sortTable(0, 'str', true);
+            }});
         </script>
     </body>
     </html>
@@ -419,7 +552,10 @@ def generate_html():
 
 
 if __name__ == "__main__":
-    print(f"Uruchomiono globalny monitor [W1-W12 / M1-M12 GRID]. Szukam w: {DIRECTORY_PATH}")
+    print(f"==================================================")
+    print(f" PROP MONITOR Global Dashboard v{DASHBOARD_VERSION} uruchomiony!")
+    print(f" Ścieżka skanowania: {DIRECTORY_PATH}")
+    print(f"==================================================")
     while True:
         try:
             generate_html()
