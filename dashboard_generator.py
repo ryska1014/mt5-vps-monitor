@@ -4,7 +4,7 @@ from datetime import datetime
 import time
 
 # --- KONFIGURACJA i WERSJONOWANIE ---
-DASHBOARD_VERSION = "1.0.2"  # Poprawiony błąd f-string w JS
+DASHBOARD_VERSION = "1.0.8"  # Ostateczna naprawa pętli generujących pionowy układ M1-M6 oraz M7-M12
 DIRECTORY_PATH = r"C:\Users\Administrator\AppData\Roaming\MetaQuotes\Terminal\Common\Files"
 OUTPUT_HTML_FILE = "dashboard.html"
 
@@ -61,7 +61,6 @@ def generate_html():
     now = datetime.now()
     now_str = now.strftime("%Y.%m.%d %H:%M:%S")
     
-    # --- AUTOMATYCZNE WYKRYWANIE NAJWYŻSZEJ WERSJI BOTÓW MT5 ---
     highest_version_str = "0.00"
     highest_version_tuple = (0, 0)
     
@@ -180,13 +179,19 @@ def generate_html():
             .history-grid {{
                 display: grid;
                 grid-template-columns: repeat(2, 1fr);
-                gap: 8px 15px;
+                gap: 8px 25px;
+            }}
+            .history-col {{
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
             }}
             .history-item {{
                 display: flex;
                 justify-content: space-between;
-                border-bottom: 1px dashed #334155;
-                padding-bottom: 2px;
+                align-items: center;
+                border-bottom: 1px dashed #2d3748;
+                padding-bottom: 4px;
                 font-family: monospace;
                 font-size: 13px;
             }}
@@ -296,9 +301,10 @@ def generate_html():
                         <th onclick="sortTable(5, 'num')">Niezamknięte PnL</th>
                         <th onclick="sortTable(6, 'num')">Wynik Dziś</th>
                         <th onclick="sortTable(7, 'num')">Tydzień (W0)</th>
-                        <th onclick="sortTable(8, 'num')">Miesiąc (M0)</th>
-                        <th onclick="sortTable(9, 'num')">Pozycje</th>
-                        <th onclick="sortTable(10, 'str')">Status</th>
+                        <th onclick="sortTable(8, 'num')">Tydzień (W1)</th>
+                        <th onclick="sortTable(9, 'num')">Miesiąc (M0)</th>
+                        <th onclick="sortTable(10, 'num')">Pozycje</th>
+                        <th onclick="sortTable(11, 'str')">Status</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -310,7 +316,9 @@ def generate_html():
         
         balance = today.get("balance", 0.0)
         equity = today.get("equity", 0.0)
-        pnl_open = round(equity - balance, 2)
+        credit = today.get("account_credit", 0.0)
+        pnl_open = round(equity - balance - credit, 2)
+        
         today_net = today.get("today_net", 0.0)
         
         pnl_class = "pos" if pnl_open > 0 else ("neg" if pnl_open < 0 else "neutral")
@@ -321,13 +329,16 @@ def generate_html():
         v_class = "version-tag" + (" version-alert" if is_outdated else "")
             
         w0 = 0.0
+        w1 = 0.0
         m0 = 0.0
-        if stats and "weeks" in stats and "W0" in stats["weeks"]:
-            w0 = stats["weeks"]["W0"]
-        if stats and "months" in stats and "M0" in stats["months"]:
-            m0 = stats["months"]["M0"]
+        if stats and "weeks" in stats:
+            w0 = stats["weeks"].get("W0", 0.0)
+            w1 = stats["weeks"].get("W1", 0.0)
+        if stats and "months" in stats:
+            m0 = stats["months"].get("M0", 0.0)
             
         w0_class = "pos" if w0 > 0 else ("neg" if w0 < 0 else "neutral")
+        w1_class = "pos" if w1 > 0 else ("neg" if w1 < 0 else "neutral")
         m0_class = "pos" if m0 > 0 else ("neg" if m0 < 0 else "neutral")
         
         open_pos = today.get("open_positions_count", 0)
@@ -376,79 +387,125 @@ def generate_html():
             <td data-val="{pnl_open}" class="{pnl_class}">{pnl_open:+.2f}</td>
             <td data-val="{today_net}" class="{today_class}">{today_net:+.2f}</td>
             <td data-val="{w0}" class="{w0_class}">{w0:+.2f}</td>
+            <td data-val="{w1}" class="{w1_class}">{w1:+.2f}</td>
             <td data-val="{m0}" class="{m0_class}">{m0:+.2f}</td>
             <td data-val="{open_pos}">{open_pos} <span style="font-size:11px; color:#64748b;">({open_sym})</span></td>
             <td data-val="{open_pos}">{status_badge}</td>
         </tr>
         """
         
+        # SEKCJA SZCZEGÓŁÓW KONTA
+        html += f"""
+        <tr class="details-row" id="details-{acc_id}">
+            <td colspan="12">
+                <div class="details-box">
+        """
+        
         if stats:
-            weeks_html = ""
-            for i in range(1, 13):
+            # Lewa kolumna: W1 -> W6, Prawa kolumna: W7 -> W12
+            weeks_col1 = ""
+            for i in range(1, 7):
                 val = stats["weeks"].get(f"W{i}", 0.0)
                 cls = "pos" if val > 0 else ("neg" if val < 0 else "neutral")
-                weeks_html += f"""
+                weeks_col1 += f"""
+                <div class="history-item">
+                    <span class="history-label">Tydzień W{i}:</span>
+                    <span class="{cls}">{val:+.2f}</span>
+                </div>"""
+                
+            weeks_col2 = ""
+            for i in range(7, 13):
+                val = stats["weeks"].get(f"W{i}", 0.0)
+                cls = "pos" if val > 0 else ("neg" if val < 0 else "neutral")
+                weeks_col2 += f"""
                 <div class="history-item">
                     <span class="history-label">Tydzień W{i}:</span>
                     <span class="{cls}">{val:+.2f}</span>
                 </div>"""
 
-            months_html = ""
-            for i in range(1, 13):
+            # PEŁNA NAPRAWA: Lewa kolumna: M1 -> M6 (czysta progresja w dół)
+            months_col1 = ""
+            for i in range(1, 7):
                 val = stats["months"].get(f"M{i}", 0.0)
                 cls = "pos" if val > 0 else ("neg" if val < 0 else "neutral")
-                months_html += f"""
+                months_col1 += f"""
+                <div class="history-item">
+                    <span class="history-label">Miesiąc M{i}:</span>
+                    <span class="{cls}">{val:+.2f}</span>
+                </div>"""
+                
+            # PEŁNA NAPRAWA: Prawa kolumna: M7 -> M12 (czysta progresja w dół)
+            months_col2 = ""
+            for i in range(7, 13):
+                val = stats["months"].get(f"M{i}", 0.0)
+                cls = "pos" if val > 0 else ("neg" if val < 0 else "neutral")
+                months_col2 += f"""
                 <div class="history-item">
                     <span class="history-label">Miesiąc M{i}:</span>
                     <span class="{cls}">{val:+.2f}</span>
                 </div>"""
                 
             html += f"""
-            <tr class="details-row" id="details-{acc_id}">
-                <td colspan="11">
-                    <div class="details-box">
-                        <div class="sub-card">
-                            <h4>Historia Tygodniowa (W1 - W12)</h4>
-                            <div class="history-grid">
-                                {weeks_html}
-                            </div>
-                        </div>
-                        
-                        <div class="sub-card">
-                            <h4>Historia Miesięczna (M1 - M12)</h4>
-                            <div class="history-grid">
-                                {months_html}
-                            </div>
-                        </div>
-                        
-                        <div class="sub-card" style="border-left-color: #a855f7;">
-                            <h4>Statystyki Roczne i Zbiorcze</h4>
-                            <div style="display:flex; flex-direction:column; gap:10px; font-size:13px; margin-top:5px;">
-                                <div style="display:flex; justify-content:space-between; border-bottom:1px dashed #334155;">
-                                    <span style="color:#64748b;">Bieżący rok Y0:</span>
-                                    <strong class="{'pos' if stats['years'].get('Y0',0)>=0 else 'neg'}">{stats['years'].get('Y0',0):+.2f}</strong>
-                                </div>
-                                <div style="display:flex; justify-content:space-between; border-bottom:1px dashed #334155;">
-                                    <span style="color:#64748b;">Ubiegły rok Y1:</span>
-                                    <strong class="{'pos' if stats['years'].get('Y1',0)>=0 else 'neg'}">{stats['years'].get('Y1',0):+.2f}</strong>
-                                </div>
-                                <div style="margin-top:10px; font-size:11px; color:#64748b; line-height:1.4;">
-                                    * Dane historyczne odświeżane sunt automatycznie raz na dobę po zmianie daty serwera VPS.
-                                </div>
-                            </div>
+                    <div class="sub-card">
+                        <h4>Historia Tygodniowa (W1 - W12)</h4>
+                        <div class="history-grid">
+                            <div class="history-col">{weeks_col1}</div>
+                            <div class="history-col">{weeks_col2}</div>
                         </div>
                     </div>
-                </td>
-            </tr>
+                    
+                    <div class="sub-card">
+                        <h4>Historia Miesięczna (M1 - M12)</h4>
+                        <div class="history-grid">
+                            <div class="history-col">{months_col1}</div>
+                            <div class="history-col">{months_col2}</div>
+                        </div>
+                    </div>
             """
         else:
             html += f"""
-            <tr class="details-row" id="details-{acc_id}">
-                <td colspan="11" style="color:#64748b; padding:20px; font-size:13px; background-color: #0f172a; text-align:left;">
-                    ⚠️ Oczekiwanie na dobowe wygenerowanie statystyk (Brak pliku stats_{acc_id}.json). Strumień live działa poprawnie.
-                </td>
-            </tr>
+                    <div class="sub-card" style="border-left-color: #64748b; grid-column: span 2;">
+                        <h4>Statystyki Historyczne</h4>
+                        <div style="color:#64748b; padding:10px 0; font-size:13px;">
+                            ⚠️ Oczekiwanie na dobowe wygenerowanie statystyk (Brak pliku stats_{acc_id}.json). Strumień live działa poprawnie.
+                        </div>
+                    </div>
             """
+
+        credit_html = ""
+        if credit > 0:
+            credit_html = f"""
+            <div style="display:flex; justify-content:space-between; border-bottom:1px dashed #334155; background-color: rgba(56, 189, 248, 0.08); padding: 4px 6px; border-radius: 4px; margin-bottom: 5px;">
+                <span style="color:#38bdf8; font-weight: bold;">Zwrot za rejestrację (Credit):</span>
+                <strong style="color:#38bdf8;">{credit:,.2f}</strong>
+            </div>
+            """
+
+        y0_val = stats['years'].get('Y0', 0.0) if stats else 0.0
+        y1_val = stats['years'].get('Y1', 0.0) if stats else 0.0
+
+        html += f"""
+                    <div class="sub-card" style="border-left-color: #a855f7;">
+                        <h4>Statystyki Roczne i Finanse</h4>
+                        <div style="display:flex; flex-direction:column; gap:10px; font-size:13px; margin-top:5px;">
+                            {credit_html}
+                            <div style="display:flex; justify-content:space-between; border-bottom:1px dashed #334155;">
+                                <span style="color:#64748b;">Bieżący rok Y0:</span>
+                                <strong class="{'pos' if y0_val>=0 else 'neg'}">{y0_val:+.2f}</strong>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; border-bottom:1px dashed #334155;">
+                                <span style="color:#64748b;">Ubiegły rok Y1:</span>
+                                <strong class="{'pos' if y1_val>=0 else 'neg'}">{y1_val:+.2f}</strong>
+                            </div>
+                            <div style="margin-top:10px; font-size:11px; color:#64748b; line-height:1.4;">
+                                * Dane finansowe live uwzględniają zamrożone środki typu Credit. Historia zysków ignoruje operacje wpłat/wypłat.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </td>
+        </tr>
+        """
             
     html += f"""
                 </tbody>
@@ -484,7 +541,7 @@ def generate_html():
                 if (isAutomatic && savedCol !== null) {{
                     colIndex = parseInt(savedCol);
                     isAsc = (savedAsc === "true");
-                    type = (colIndex === 0 || colIndex === 1 || colIndex === 10) ? 'str' : 'num';
+                    type = (colIndex === 0 || colIndex === 1 || colIndex === 11) ? 'str' : 'num';
                 }} else {{
                     if (savedCol !== null && parseInt(savedCol) === colIndex) {{
                         isAsc = (savedAsc !== "true");
@@ -537,7 +594,7 @@ def generate_html():
 
             window.addEventListener('DOMContentLoaded', () => {{
                 if (localStorage.getItem("sortCol") === null) {{
-                    localStorage.setItem("sortCol", 5);
+                    localStorage.setItem("sortCol", 6);
                     localStorage.setItem("sortAsc", false);
                 }}
                 sortTable(0, 'str', true);
