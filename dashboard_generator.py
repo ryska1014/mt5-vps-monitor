@@ -4,7 +4,7 @@ from datetime import datetime
 import time
 
 # --- KONFIGURACJA i WERSJONOWANIE ---
-DASHBOARD_VERSION = "1.0.8"  # Ostateczna naprawa pętli generujących pionowy układ M1-M6 oraz M7-M12
+DASHBOARD_VERSION = "1.1.0"  # Inteligentne sortowanie PnL (pozycje na górze) + ukryta gotowość na flagę AlgoTrading
 DIRECTORY_PATH = r"C:\Users\Administrator\AppData\Roaming\MetaQuotes\Terminal\Common\Files"
 OUTPUT_HTML_FILE = "dashboard.html"
 
@@ -245,8 +245,8 @@ def generate_html():
                 font-weight: bold;
             }}
             
-            .badge-on {{ background: #15803d; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; }}
-            .badge-off {{ background: #991b1b; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; }}
+            .badge-on {{ background: #15803d; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }}
+            .badge-off {{ background: #991b1b; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }}
             
             .footer {{
                 position: fixed;
@@ -304,7 +304,8 @@ def generate_html():
                         <th onclick="sortTable(8, 'num')">Tydzień (W1)</th>
                         <th onclick="sortTable(9, 'num')">Miesiąc (M0)</th>
                         <th onclick="sortTable(10, 'num')">Pozycje</th>
-                        <th onclick="sortTable(11, 'str')">Status</th>
+                        <th onclick="sortTable(11, 'num')">Algo</th>
+                        <th onclick="sortTable(12, 'str')">Status</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -344,6 +345,11 @@ def generate_html():
         open_pos = today.get("open_positions_count", 0)
         open_sym = today.get("open_symbols", "none")
         status_badge = f'<span class="badge-on">LIVE</span>' if open_pos > 0 else '<span class="badge-off">IDLE</span>'
+        
+        # BEZPIECZNA OBSŁUGA ALGO TRADINGU: Domyślnie True (ON), jeśli tagu nie ma w pliku JSON
+        algo_trading_active = today.get("algo_trading", True)
+        algo_val = 1 if algo_trading_active else 0
+        algo_badge = f'<span class="badge-on">ON</span>' if algo_trading_active else f'<span class="badge-off">OFF</span>'
         
         broker_name = today.get("broker", "Nieznany Broker")
         server_name = today.get("server", "Nieznany Serwer")
@@ -390,19 +396,19 @@ def generate_html():
             <td data-val="{w1}" class="{w1_class}">{w1:+.2f}</td>
             <td data-val="{m0}" class="{m0_class}">{m0:+.2f}</td>
             <td data-val="{open_pos}">{open_pos} <span style="font-size:11px; color:#64748b;">({open_sym})</span></td>
+            <td data-val="{algo_val}">{algo_badge}</td>
             <td data-val="{open_pos}">{status_badge}</td>
         </tr>
         """
         
-        # SEKCJA SZCZEGÓŁÓW KONTA
+        # SEKCJA SZCZEGÓŁÓW KONTA (colspan zwiększony do 13 dla nowej kolumny)
         html += f"""
         <tr class="details-row" id="details-{acc_id}">
-            <td colspan="12">
+            <td colspan="13">
                 <div class="details-box">
         """
         
         if stats:
-            # Lewa kolumna: W1 -> W6, Prawa kolumna: W7 -> W12
             weeks_col1 = ""
             for i in range(1, 7):
                 val = stats["weeks"].get(f"W{i}", 0.0)
@@ -423,7 +429,6 @@ def generate_html():
                     <span class="{cls}">{val:+.2f}</span>
                 </div>"""
 
-            # PEŁNA NAPRAWA: Lewa kolumna: M1 -> M6 (czysta progresja w dół)
             months_col1 = ""
             for i in range(1, 7):
                 val = stats["months"].get(f"M{i}", 0.0)
@@ -434,7 +439,6 @@ def generate_html():
                     <span class="{cls}">{val:+.2f}</span>
                 </div>"""
                 
-            # PEŁNA NAPRAWA: Prawa kolumna: M7 -> M12 (czysta progresja w dół)
             months_col2 = ""
             for i in range(7, 13):
                 val = stats["months"].get(f"M{i}", 0.0)
@@ -541,12 +545,13 @@ def generate_html():
                 if (isAutomatic && savedCol !== null) {{
                     colIndex = parseInt(savedCol);
                     isAsc = (savedAsc === "true");
-                    type = (colIndex === 0 || colIndex === 1 || colIndex === 11) ? 'str' : 'num';
+                    type = (colIndex === 0 || colIndex === 1 || colIndex === 12) ? 'str' : 'num';
                 }} else {{
                     if (savedCol !== null && parseInt(savedCol) === colIndex) {{
                         isAsc = (savedAsc !== "true");
                     }} else {{
-                        isAsc = (colIndex === 2) ? true : false;
+                        // Dla PnL (5) i Wyniku Dziś (6) domyślne kliknięcie sortuje od największych zysków
+                        isAsc = (colIndex === 2) ? true : (colIndex === 5 || colIndex === 6 ? false : true);
                     }}
                     localStorage.setItem("sortCol", colIndex);
                     localStorage.setItem("sortAsc", isAsc);
@@ -563,6 +568,24 @@ def generate_html():
                 pairs.sort((pairA, pairB) => {{
                     let cellA = pairA.main.children[colIndex].getAttribute("data-val") || "0";
                     let cellB = pairB.main.children[colIndex].getAttribute("data-val") || "0";
+
+                    // INTELIGENTNA LOGIKA DLA NIEZAMKNIĘTEGO PnL (Kolumna indeks 5)
+                    if (colIndex === 5) {{
+                        // Pobieramy liczbę pozycji z kolumny 10 (indeks 10)
+                        let posA = parseInt(pairA.main.children[10].getAttribute("data-val") || "0");
+                        let posB = parseInt(pairB.main.children[10].getAttribute("data-val") || "0");
+
+                        // Wyświetlaj konta z otwartymi pozycjami zawsze na górze tabeli
+                        if (posA > 0 && posB === 0) return -1;
+                        if (posA === 0 && posB > 0) return 1;
+                        
+                        // Gdy oba konta odpoczywają (0 pozycji), ułóż je na dole po numerze konta
+                        if (posA === 0 && posB === 0) {{
+                            let idA = pairA.main.children[0].getAttribute("data-val") || "";
+                            let idB = pairB.main.children[0].getAttribute("data-val") || "";
+                            return idA.localeCompare(idB);
+                        }}
+                    }}
 
                     if (type === 'num') {{
                         let numA = parseFloat(cellA);
@@ -593,8 +616,9 @@ def generate_html():
             }}
 
             window.addEventListener('DOMContentLoaded', () => {{
+                // Ustawiamy domyślne sortowanie od razu po wejściu na stronę na Niezamknięte PnL (od zysków)
                 if (localStorage.getItem("sortCol") === null) {{
-                    localStorage.setItem("sortCol", 6);
+                    localStorage.setItem("sortCol", 5);
                     localStorage.setItem("sortAsc", false);
                 }}
                 sortTable(0, 'str', true);
